@@ -262,7 +262,8 @@ def decompile_function(program, sub_addr):
     analyze_stack(sub)
     # remove_shadow_stack_writes(sub)
     # delete_prologue_epilogue(sub)
-    delete_function_call(sub, 0x180002010)
+    if hasattr(program, 'check_cookie_addr'):
+        delete_function_call(sub, program.check_cookie_addr)
     stack_size = get_stack_size(sub)
     sub.stack_size = stack_size
     analyze_cond_flags(sub.bbs)
