@@ -69,11 +69,10 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
         if operand.mem.base == X86_REG_RSP or (operand.mem.base == X86_REG_RBP and insn.rbp_stack_off != -1):
             stack_off = insn.rbp_stack_off if operand.mem.base == X86_REG_RBP else insn.stack_off
             if operand.mem.disp >= stack_off + 8 + CURRENT_ABI.shadow_stack_space_size:
-                print(f'// arg {operand.mem.disp:x} {stack_off:x}')
+                # print(f'// arg {operand.mem.disp:x} {stack_off:x}')
                 ret = CAdd(CVar('RSP_args', CDataType.U8_PTR), CImm(operand.mem.disp - (stack_off + 8 + CURRENT_ABI.shadow_stack_space_size), CDataType.S64))
             elif operand.mem.disp >= stack_off + 8:
-                off = operand.mem.disp - (stack_off + 8)
-                ret = CAdd(REG_EXPR[X86_REG_RSP], CImm(insn.sub.stack_size + off, CDataType.S64))
+                ret = CAdd(REG_EXPR[operand.mem.base], CImm(operand.mem.disp - 8, CDataType.S64))
 
         if ret is not None:
             pass
@@ -89,7 +88,7 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
             if operand.mem.disp != 0:
                 ret = CAdd(ret, CImm(operand.mem.disp, CDataType.S64))
         if operand.mem.index != 0:
-            ret = CAdd(ret, CMul(REG_EXPR[operand.mem.index], operand.mem.scale))
+            ret = CAdd(ret, CMul(cast_signed(REG_EXPR[operand.mem.index]), operand.mem.scale))
         if deref:
             ret = CDeref(ret, SIZE_TO_DATATYPE[operand.size])
         return ret
@@ -98,7 +97,7 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
             return REG_EXPR[operand.reg].expr
         return REG_EXPR[operand.reg]
     if operand.type == X86_OP_IMM:
-        return CImm(operand.imm & ((1<<64)-1), SIZE_TO_DATATYPE[operand.size].preferred_imm_type())
+        return CImm(operand.imm & ((1<<(8*operand.size))-1), SIZE_TO_DATATYPE[operand.size].preferred_imm_type())
     return None
 
 
@@ -415,8 +414,9 @@ for cond_id, jmp_id in X86_SET_TO_JMP.items():
 @insn_handler(X86_INS_CALL)
 def call_handler(insn: 'Instruction'):
     i = insn.i
-    regs = CURRENT_ABI.func_registers + [X86_REG_RSP]
+    regs = CURRENT_ABI.func_registers
     args = [REG_EXPR[reg] if REG_TO_PRIMARY_REG[reg] in insn.sub.used_regs else CVar('UNDEF', CDataType.U64) for reg in regs]
+    args += [CAdd(REG_EXPR[X86_REG_RSP], CURRENT_ABI.shadow_stack_space_size) if X86_REG_RSP in insn.sub.used_regs else CVar('UNDEF', CDataType.U64)]
     if i.operands[0].type == X86_OP_IMM:
         target = CVar(get_sub_name(i.operands[0].imm), CDataType.FUNC)
     else:
