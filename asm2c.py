@@ -10,7 +10,7 @@ from consts import *
 from insns import insn_handlers, REG_VARS
 from ctx import get_sub_name, set_cur_program
 from transforms import remove_shadow_stack_writes, get_stack_size, delete_prologue_epilogue, delete_function_call
-from utils import REG_TO_PRIMARY_REG
+from utils import REG_TO_PRIMARY_REG, find_bb_order
 
 
 @dataclasses.dataclass
@@ -20,8 +20,7 @@ class Instruction:
     settable_flags: int
     set_flags: int
     received_flags: int
-    stack_off: int
-    rbp_stack_off: int
+    reg_stack_off: Optional[dict[int, int]]
 
     def __init__(self, i: Any):
         self.sub = None
@@ -29,20 +28,20 @@ class Instruction:
         self.settable_flags = 0
         self.set_flags = 0
         self.received_flags = 0
-        self.stack_off = 0
-        self.rbp_stack_off = 0
+        self.reg_stack_off = None
 
         if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF | FLAG_CF
         if i.id in (X86_INS_INC, X86_INS_DEC):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF
+        if i.id == X86_INS_BT:
+            self.settable_flags = FLAG_OF | FLAG_SF | FLAG_AF | FLAG_PF | FLAG_CF
         if i.id in X86_JUMP_FLAGS:
             self.received_flags = X86_JUMP_FLAGS[i.id]
         if i.id in X86_CMOV_TO_JMP:
             self.received_flags = X86_JUMP_FLAGS[X86_CMOV_TO_JMP[i.id]]
         if i.id in X86_SET_TO_JMP:
             self.received_flags = X86_JUMP_FLAGS[X86_SET_TO_JMP[i.id]]
-
 
     def get_used_registers(self, ret: set[int]):
         for op in self.i.operands:
@@ -52,6 +51,12 @@ class Instruction:
                 ret.add(op.mem.base)
             if op.type == X86_OP_MEM and op.mem.index != 0:
                 ret.add(op.mem.index)
+
+    def get_changed_registers(self):
+        if self.i.id in X86_INSTRUCTIONS_CHANGING_FIRST_REG:
+            if self.i.operands[0].type == X86_OP_REG:
+                return {self.i.operands[0].reg}
+        return None
 
     def to_c(self):
         if self.i.id not in insn_handlers:
@@ -76,6 +81,7 @@ class BB:
 class Subroutine:
     bbs: dict[int, BB]
     entry_bb: BB
+    ordered_bbs: list[BB]
     used_regs: set[int]
     stack_size: int = 0
 
@@ -106,7 +112,8 @@ class Program:
                     bbs[target_addr].prev_blocks.append(bb)
 
         used_regs = expand_used_registers(find_all_used_registers(bbs))
-        ret = Subroutine(bbs, bbs[addr], used_regs)
+        ordered_bbs = find_bb_order(bbs[addr])
+        ret = Subroutine(bbs, bbs[addr], ordered_bbs, used_regs)
         for bb in bbs.values():
             for i in bb.instructions:
                 i.sub = ret
@@ -150,7 +157,7 @@ def analyze_cond_flags(sub: dict[int, BB]):
                 bb_queue.add(obb.start)
 
 
-def analyze_stack(sub: dict[int, BB]):
+def analyze_stack_old(sub: dict[int, BB]):
     bb_stack_off = {}
     for bb in sub.values():
         stack_off, rbp_stack_off = bb_stack_off.get(bb.start, (0, -1))
@@ -172,6 +179,61 @@ def analyze_stack(sub: dict[int, BB]):
         for next in bb.next_blocks:
             v_stack_off, v_rbp_stack_off = bb_stack_off.get(next.start, (0, -1))
             bb_stack_off[next.start] = max(stack_off, v_stack_off), max(rbp_stack_off, v_rbp_stack_off)
+
+
+def analyze_stack(sub: Subroutine):
+    used_regs = set()
+    bb_stack_off = {}
+    bb_stack_off[sub.entry_bb.start] = {X86_REG_RSP: 0}
+    for bb in sub.ordered_bbs:
+        reg_stack_off = bb_stack_off.get(bb.start, {})
+        for insn in bb.instructions:
+            insn.stack_off = reg_stack_off[X86_REG_RSP]
+            used_regs.clear()
+            insn.get_used_registers(used_regs)
+            for reg in used_regs:
+                reg = REG_TO_PRIMARY_REG.get(reg, reg)
+                if reg in reg_stack_off:
+                    if insn.reg_stack_off is None:
+                        insn.reg_stack_off = {}
+                    insn.reg_stack_off[reg] = reg_stack_off[reg]
+
+            if insn.i.id == X86_INS_PUSH:
+                reg_stack_off[X86_REG_RSP] -= insn.i.operands[0].size
+            elif insn.i.id == X86_INS_POP:
+                reg_stack_off[X86_REG_RSP] += insn.i.operands[0].size
+            elif insn.i.id == X86_INS_SUB and insn.i.operands[0].type == X86_OP_REG and insn.i.operands[0].reg == X86_REG_RSP and insn.i.operands[1].type == X86_OP_IMM:
+                reg_stack_off[X86_REG_RSP] -= insn.i.operands[1].imm
+            elif insn.i.id == X86_INS_ADD and insn.i.operands[0].type == X86_OP_REG and insn.i.operands[0].reg == X86_REG_RSP and insn.i.operands[1].type == X86_OP_IMM:
+                reg_stack_off[X86_REG_RSP] += insn.i.operands[1].imm
+            elif insn.i.id == X86_INS_MOV and insn.i.operands[0].type == X86_OP_REG:
+                if insn.i.operands[1].type == X86_OP_REG and insn.i.operands[1].reg in reg_stack_off:
+                    reg_stack_off[insn.i.operands[0].reg] = reg_stack_off[insn.i.operands[1].reg]
+                elif insn.i.operands[0].reg in reg_stack_off:
+                    del reg_stack_off[insn.i.operands[0].reg]
+            elif insn.i.id == X86_INS_LEA and insn.i.operands[0].type == X86_OP_REG and insn.i.operands[1].type == X86_OP_MEM:
+                if insn.i.operands[1].mem.base in reg_stack_off:
+                    reg_stack_off[insn.i.operands[0].reg] = reg_stack_off[insn.i.operands[1].mem.base] + insn.i.operands[1].mem.disp
+                elif insn.i.operands[0].reg in reg_stack_off:
+                    del reg_stack_off[insn.i.operands[0].reg]
+            else:
+                regs = insn.get_changed_registers()
+                if regs is not None:
+                    for reg in regs:
+                        if reg in REG_TO_PRIMARY_REG and REG_TO_PRIMARY_REG[reg] in reg_stack_off:
+                            del reg_stack_off[REG_TO_PRIMARY_REG[reg]]
+
+        for next in bb.next_blocks:
+            if next.start not in bb_stack_off:
+                bb_stack_off[next.start] = dict(reg_stack_off)
+            else:
+                v_reg_stack_off = bb_stack_off[next.start]
+                for reg in list(v_reg_stack_off.keys()):
+                    if reg not in reg_stack_off:
+                        del v_reg_stack_off[reg]
+                for reg, stack_off in reg_stack_off.items():
+                    if reg in v_reg_stack_off:
+                        v_reg_stack_off[reg] = min(v_reg_stack_off[reg], stack_off)
 
 
 def find_all_used_registers(sub: dict[int, BB]):
@@ -197,9 +259,9 @@ def get_fn_sig(sub_addr):
 
 def decompile_function(program, sub_addr):
     sub = program.disassemble_sub(sub_addr)
-    analyze_stack(sub.bbs)
-    remove_shadow_stack_writes(sub)
-    delete_prologue_epilogue(sub)
+    analyze_stack(sub)
+    # remove_shadow_stack_writes(sub)
+    # delete_prologue_epilogue(sub)
     delete_function_call(sub, 0x180002010)
     stack_size = get_stack_size(sub)
     sub.stack_size = stack_size

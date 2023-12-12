@@ -66,8 +66,8 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
     i = insn.i
     if operand.type == X86_OP_MEM:
         ret = None
-        if operand.mem.base == X86_REG_RSP or (operand.mem.base == X86_REG_RBP and insn.rbp_stack_off != -1):
-            stack_off = insn.rbp_stack_off if operand.mem.base == X86_REG_RBP else insn.stack_off
+        if insn.reg_stack_off is not None and operand.mem.base in insn.reg_stack_off:
+            stack_off = -insn.reg_stack_off[operand.mem.base]
             if operand.mem.disp >= stack_off + 8 + CURRENT_ABI.shadow_stack_space_size:
                 # print(f'// arg {operand.mem.disp:x} {stack_off:x}')
                 ret = CAdd(CVar('RSP_args', CDataType.U8_PTR), CImm(operand.mem.disp - (stack_off + 8 + CURRENT_ABI.shadow_stack_space_size), CDataType.S64))
@@ -97,7 +97,7 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
             return REG_EXPR[operand.reg].expr
         return REG_EXPR[operand.reg]
     if operand.type == X86_OP_IMM:
-        return CImm(operand.imm & ((1<<(8*operand.size))-1), SIZE_TO_DATATYPE[operand.size].preferred_imm_type())
+        return CImm(operand.imm & ((1<<(8*operand.size))-1), SIZE_TO_DATATYPE[operand.size])
     return None
 
 
@@ -448,4 +448,33 @@ def cdq_handler(insn: 'Instruction'):
 def cdqe_handler(insn: 'Instruction'):
     return [
         CAssign(REG_VARS[X86_REG_RAX], CCast(CCast(cast_signed(REG_EXPR[X86_REG_EAX]), CDataType.S64, False), CDataType.U64, False))
+    ]
+
+
+@insn_handler(X86_INS_BT)
+def bt_handler(insn: 'Instruction'):
+    ret = []
+    if (insn.set_flags & FLAG_CF) != 0:
+        right = build_operand(insn, insn.i.operands[1])
+        ret.append(CAssign(VAR_CF, CAnd(CShr(build_operand(insn, insn.i.operands[0]), CAnd(right, CImm(8 * insn.i.operands[0].size - 1, CDataType.U64))), CImm(1, CDataType.U32))))
+    if (insn.set_flags & FLAG_SF) != 0:
+        raise Exception("BT: SF is undefined")
+    if (insn.set_flags & FLAG_PF) != 0:
+        raise Exception("BT: PF is undefined")
+    if (insn.set_flags & FLAG_OF) != 0:
+        raise Exception("BT: OF is undefined")
+    return ret
+
+
+@insn_handler(X86_INS_NOT)
+def not_handler(insn: 'Instruction'):
+    return [
+        CAssign(build_operand(insn, insn.i.operands[0], extend_to_64_bit=True), CBitNot(build_operand(insn, insn.i.operands[0])))
+    ]
+
+
+@insn_handler(X86_INS_NEG)
+def neg_handler(insn: 'Instruction'):
+    return [
+        CAssign(build_operand(insn, insn.i.operands[0], extend_to_64_bit=True), CNeg(cast_signed(build_operand(insn, insn.i.operands[0]))))
     ]
