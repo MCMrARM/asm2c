@@ -44,6 +44,13 @@ class CDataType(enum.Enum):
             return CDataType.S64
         raise Exception(f"Cannot make {self} signed")
 
+    def preferred_imm_type(self):
+        if self == CDataType.U8 or self == CDataType.U16:
+            return CDataType.U32
+        if self == CDataType.S8 or self == CDataType.S16:
+            return CDataType.S32
+        return self
+
 
 class CExpr:
     datatype: Optional[CDataType]
@@ -97,7 +104,11 @@ class CArrIndex(CExpr):
         self.index = index
 
     def __str__(self):
-        return f"{self.expr}[{self.index}]"
+        return f"({self.expr})[{self.index}]"
+
+    @property
+    def datatype(self):
+        return CDataType.U8
 
 
 class CImm(CExpr):
@@ -126,9 +137,19 @@ class CImm(CExpr):
             return hex(self.imm) + 'LL'
         if self.datatype == CDataType.U64:
             return hex(self.imm) + 'LLU'
-        if self.datatype in (CDataType.S32, CDataType.S16, CDataType.S8):
+        if self.datatype == CDataType.S32:
             return hex(self.imm)
-        return hex(self.imm) + 'U'
+        if self.datatype == CDataType.U32:
+            return hex(self.imm) + 'U'
+        if self.datatype == CDataType.S16:
+            return '(int16_t) ' + hex(self.imm)
+        if self.datatype == CDataType.U16:
+            return '(uint16_t) ' + hex(self.imm) + 'U'
+        if self.datatype == CDataType.S8:
+            return '(int8_t) ' + hex(self.imm)
+        if self.datatype == CDataType.U8:
+            return '(uint8_t) ' + hex(self.imm) + 'U'
+        raise Exception(f"Unknown CImm type: {self.datatype}")
 
 
 class CAssign(CExpr):
@@ -164,7 +185,8 @@ class CArith(CExpr):
 
     @property
     def datatype(self):
-        return self.left.datatype
+        ret = self.left.datatype
+        return ret.preferred_imm_type()
 
 
 class CArith1(CExpr):
@@ -173,7 +195,7 @@ class CArith1(CExpr):
         self.symbol = symbol
 
     def __str__(self):
-        return f"{self.symbol}{self.left}"
+        return f"{self.symbol}({self.left})"
 
     @property
     def datatype(self):
@@ -238,9 +260,13 @@ COr = partial(CArith, symbol="|")
 CXor = partial(CArith, symbol="^")
 CNot = partial(CArith1, symbol="!")
 CNeg = partial(CArith1, symbol="-")
+CBitNot = partial(CArith1, symbol="~")
+CBoolAnd = partial(CArith, symbol="&&")
+CBoolOr = partial(CArith, symbol="||")
 
 CEq = partial(CArith, symbol="==")
 CNe = partial(CArith, symbol="!=")
 CLt = partial(CArith, symbol="<")
+CGt = partial(CArith, symbol=">")
 CLEq = partial(CArith, symbol="<=")
 

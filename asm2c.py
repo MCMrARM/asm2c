@@ -32,7 +32,7 @@ class Instruction:
         self.stack_off = 0
         self.rbp_stack_off = 0
 
-        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_TEST):
+        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF | FLAG_CF
         if i.id in (X86_INS_INC, X86_INS_DEC):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF
@@ -144,8 +144,9 @@ def analyze_cond_flags(sub: dict[int, BB]):
             insn.received_flags = flags
 
         for obb in bb.prev_blocks:
-            if flags != bb_flags.get(obb.start, 0):
-                bb_flags[obb.start] = flags
+            old_flags = bb_flags.get(obb.start, 0)
+            if (old_flags | flags) != old_flags:
+                bb_flags[obb.start] = old_flags | flags
                 bb_queue.add(obb.start)
 
 

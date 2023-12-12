@@ -30,7 +30,7 @@ for (name, reg64, reg32, reg16, reg8l, reg8u) in X86_REGISTERS:
     REG_EXPR[reg32] = CCast(REG_VARS[reg64], CDataType.U32, True)
     REG_EXPR[reg16] = CCast(REG_VARS[reg64], CDataType.U16, True)
     REG_EXPR[reg8l] = CCast(REG_VARS[reg64], CDataType.U8, True)
-    REG_EXPR[reg8u] = CArrIndex(CCast(REG_VARS[reg64], CDataType.U8_PTR, True), CImm(1))
+    REG_EXPR[reg8u] = CArrIndex(CRef(CCast(REG_VARS[reg64], CDataType.U8, True)), CImm(1))
 for (name, reg128) in X86_128_REGISTERS:
     REG_VARS[reg128] = CVar(name, CDataType.R128)
     REG_EXPR[reg128] = REG_VARS[reg128]
@@ -98,7 +98,7 @@ def build_operand(insn, operand: X86Op, deref: bool = True, extend_to_64_bit: bo
             return REG_EXPR[operand.reg].expr
         return REG_EXPR[operand.reg]
     if operand.type == X86_OP_IMM:
-        return CImm(operand.imm, SIZE_TO_DATATYPE[operand.size])
+        return CImm(operand.imm & ((1<<64)-1), SIZE_TO_DATATYPE[operand.size].preferred_imm_type())
     return None
 
 
@@ -139,12 +139,6 @@ def ret_handler(insn: 'Instruction'):
     ]
 
 
-# def clear_top_bits(insn: 'Instruction'):
-#     op0 = insn.i.operands[0]
-#     if op0.type == X86_OP_REG and op0.size < 8:
-#         return [CAssign(REG_EXPR[op0.reg].expr, CAnd(REG_EXPR[op0.reg].expr, CImm((1 << 32) - 1)))]
-#     return []
-
 @insn_handler(X86_INS_MOV)
 @insn_handler(X86_INS_MOVQ)
 @insn_handler(X86_INS_MOVDQU)
@@ -155,16 +149,16 @@ def ret_handler(insn: 'Instruction'):
 @insn_handler(X86_INS_MOVZX)
 def mov_handler(insn: 'Instruction'):
     i = insn.i
-    ret = clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), cast_to(build_operand(insn, i.operands[1]), SIZE_TO_DATATYPE[i.operands[0].size], False)))
+    ret = []
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), cast_to(build_operand(insn, i.operands[1]), SIZE_TO_DATATYPE[i.operands[0].size], False)))
     return ret
 
 
 @insn_handler(X86_INS_MOVSXD)
 def movsxd_handler(insn: 'Instruction'):
     i = insn.i
-    ret = clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), cast_signed(build_operand(insn, i.operands[1]))))
+    ret = []
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), cast_signed(build_operand(insn, i.operands[1]))))
     return ret
 
 
@@ -172,29 +166,21 @@ def movsxd_handler(insn: 'Instruction'):
 @insn_handler(X86_INS_LEA)
 def lea_handler(insn: 'Instruction'):
     i = insn.i
-    ret = clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1], deref=False)))
+    ret = []
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), build_operand(insn, i.operands[1], deref=False)))
     return ret
 
-
-
-def _create_add_sub_of(left: CExpr, right: CExpr, expr: CExpr):
-    # #((rdx ^ rcx) & (rdx ^ (rdx + rcx))) >> 63
-    return CAssign(VAR_OF, CShr(CAnd(CXor(left, right), CXor(left, expr)), left.datatype.size() * 8 - 1))
-
-
-    # r = cast_signed(left)
-    # src_sign = CLt(r, CImm(0, r.datatype))
-    # r = cast_signed(expr)
-    # final_sign = CLt(r, CImm(0, r.datatype))
-    # return CAssign(VAR_OF, CNe(src_sign, final_sign))
 
 def handle_add_flags(insn: 'Instruction', left: CExpr, right: CExpr, expr: CExpr):
     ret = []
     if (insn.set_flags & FLAG_CF) != 0:
         ret.append(CAssign(VAR_CF, CLt(expr, left)))
     if (insn.set_flags & FLAG_OF) != 0:
-        ret.append(_create_add_sub_of(left, right, expr))
+        zero = CImm(0, CDataType.S32)
+        ret.append(CAssign(VAR_OF, CBoolOr(
+            CBoolAnd(CBoolAnd(CGt(cast_signed(left), zero), CGt(cast_signed(right), zero)), CLt(cast_signed(expr), zero)),
+            CBoolAnd(CBoolAnd(CLt(cast_signed(left), zero), CLt(cast_signed(right), zero)), CGt(cast_signed(expr), zero))
+        )))
     return ret
 
 
@@ -203,7 +189,11 @@ def handle_sub_flags(insn: 'Instruction', left: CExpr, right: CExpr, expr: CExpr
     if (insn.set_flags & FLAG_CF) != 0:
         ret.append(CAssign(VAR_CF, CLt(left, right)))
     if (insn.set_flags & FLAG_OF) != 0:
-        ret.append(_create_add_sub_of(left, right, expr))
+        zero = CImm(0, CDataType.S32)
+        ret.append(CAssign(VAR_OF, CBoolOr(
+            CBoolAnd(CBoolAnd(CGt(cast_signed(left), zero), CLt(cast_signed(right), zero)), CLt(cast_signed(expr), zero)),
+            CBoolAnd(CBoolAnd(CLt(cast_signed(left), zero), CGt(cast_signed(right), zero)), CGt(cast_signed(expr), zero))
+        )))
     return ret
 
 
@@ -220,10 +210,10 @@ def handle_zero_cf_of(insn: 'Instruction'):
 def sub_handler(insn: 'Instruction'):
     i = insn.i
     expr = CSub(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
-    ret += handle_sub_flags(insn, expr.left, expr.right, expr)
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_sub_flags(insn, expr.left, expr.right, expr_c)
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -231,10 +221,10 @@ def sub_handler(insn: 'Instruction'):
 def dec_handler(insn: 'Instruction'):
     i = insn.i
     expr = CSub(build_operand(insn, i.operands[0]), CImm(1, SIZE_TO_DATATYPE[i.operands[0].size]))
-    ret = common_flags(insn, expr)
-    ret += handle_sub_flags(insn, expr.left, expr.right, expr)  # lack of CF change is handled by not adding it to set_flags
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_sub_flags(insn, expr.left, expr.right, expr_c)
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -242,10 +232,10 @@ def dec_handler(insn: 'Instruction'):
 def add_handler(insn: 'Instruction'):
     i = insn.i
     expr = CAdd(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
-    ret += handle_add_flags(insn, expr.left, expr.right, expr)
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_add_flags(insn, expr.left, expr.right, expr_c)
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -253,10 +243,10 @@ def add_handler(insn: 'Instruction'):
 def inc_handler(insn: 'Instruction'):
     i = insn.i
     expr = CAdd(build_operand(insn, i.operands[0]), CImm(1, SIZE_TO_DATATYPE[i.operands[0].size]))
-    ret = common_flags(insn, expr)
-    ret += handle_add_flags(insn, expr.left, expr.right, expr)  # lack of CF change is handled by not adding it to set_flags
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_add_flags(insn, expr.left, expr.right, expr_c)  # lack of CF change is handled by not adding it to set_flags
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -264,8 +254,9 @@ def inc_handler(insn: 'Instruction'):
 def cmp_handler(insn: 'Instruction'):
     i = insn.i
     expr = CSub(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
-    ret += handle_sub_flags(insn, expr.left, expr.right, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_sub_flags(insn, expr.left, expr.right, expr_c)
     return ret
 
 
@@ -274,24 +265,25 @@ def cmp_handler(insn: 'Instruction'):
 def xor_handler(insn: 'Instruction'):
     i = insn.i
     expr = CXor(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
+    expr_c = cast_to(expr, expr.left.datatype)
     if insn.i.operands[0].type == X86_OP_REG and insn.i.operands[0].reg == insn.i.operands[1].reg:
         expr = CImm(0, SIZE_TO_DATATYPE[insn.i.operands[0].size])
+        expr_c = expr
 
-    ret = common_flags(insn, expr)
+    ret = common_flags(insn, expr_c)
     ret += handle_zero_cf_of(insn)
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
 @insn_handler(X86_INS_OR)
-def and_handler(insn: 'Instruction'):
+def or_handler(insn: 'Instruction'):
     i = insn.i
     expr = COr(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
     ret += handle_zero_cf_of(insn)
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -299,10 +291,10 @@ def and_handler(insn: 'Instruction'):
 def and_handler(insn: 'Instruction'):
     i = insn.i
     expr = CAnd(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
     ret += handle_zero_cf_of(insn)
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -310,7 +302,8 @@ def and_handler(insn: 'Instruction'):
 def test_handler(insn: 'Instruction'):
     i = insn.i
     expr = CAnd(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
     ret += handle_zero_cf_of(insn)
     return ret
 
@@ -319,13 +312,13 @@ def test_handler(insn: 'Instruction'):
 def shl_handler(insn: 'Instruction'):
     i = insn.i
     expr = CShl(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
     if (insn.set_flags & FLAG_CF) != 0:
         raise Exception("SHR: CF not implemented")
     if (insn.set_flags & FLAG_OF) != 0:
         raise Exception("SHR: OF not implemented")
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -333,13 +326,13 @@ def shl_handler(insn: 'Instruction'):
 def shr_handler(insn: 'Instruction'):
     i = insn.i
     expr = CShr(build_operand(insn, i.operands[0]), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
     if (insn.set_flags & FLAG_CF) != 0:
         raise Exception("SHR: CF not implemented")
     if (insn.set_flags & FLAG_OF) != 0:
         raise Exception("SHR: OF not implemented")
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -348,13 +341,13 @@ def sar_handler(insn: 'Instruction'):
     i = insn.i
     left = build_operand(insn, i.operands[0])
     expr = CShr(cast_signed(left), build_operand(insn, i.operands[1]))
-    ret = common_flags(insn, expr)
+    expr_c = cast_to(expr, left.datatype)
+    ret = common_flags(insn, expr_c)
     if (insn.set_flags & FLAG_CF) != 0:
         raise Exception("SAR: CF not implemented")
     if (insn.set_flags & FLAG_OF) != 0:
         raise Exception("SAR: OF not implemented")
-    ret += clear_top_bits(insn)
-    ret.append(CAssign(build_operand(insn, i.operands[0]), expr))
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
     return ret
 
 
@@ -415,10 +408,8 @@ for cond_id, jmp_id in X86_SET_TO_JMP.items():
     def set_handler(insn: 'Instruction', cond_expr=X86_COND_CONDS[jmp_id]):
         i = insn.i
         return [
-            *clear_top_bits(insn),
-            CAssign(build_operand(insn, i.operands[0]), CCast(cond_expr, SIZE_TO_DATATYPE[i.operands[0].size], False))
+            CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), CCast(cond_expr, SIZE_TO_DATATYPE[i.operands[0].size], False))
         ]
-
 
 
 @insn_handler(X86_INS_CALL)
@@ -447,10 +438,9 @@ def paddq_handler(insn: 'Instruction'):
 
 
 @insn_handler(X86_INS_CDQ)
-def cdqe_handler(insn: 'Instruction'):
-    print('//cdq')
+def cdq_handler(insn: 'Instruction'):
     return [
-        CAssign(REG_EXPR[X86_REG_EDX], CCast(CShr(CCast(cast_signed(REG_EXPR[X86_REG_EAX]), CDataType.S32, False), 31), CDataType.U32, False))
+        CAssign(REG_EXPR[X86_REG_RDX], CCast(CShr(CCast(cast_signed(REG_EXPR[X86_REG_EAX]), CDataType.S32, False), 31), CDataType.U32, False))
     ]
 
 
