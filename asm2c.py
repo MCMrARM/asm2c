@@ -8,7 +8,7 @@ from bb_finder import *
 from cbuilder import CCall, CVar, CImm, CDataType
 from consts import *
 from insns import insn_handlers, REG_VARS
-from ctx import get_sub_name, set_cur_program
+from ctx import get_sub_name, set_cur_program, get_import_name
 from transforms import remove_shadow_stack_writes, get_stack_size, delete_prologue_epilogue, delete_function_call
 from utils import REG_TO_PRIMARY_REG, find_bb_order
 
@@ -254,7 +254,9 @@ def expand_used_registers(regs: set[int]):
 
 def get_fn_sig(sub_addr):
     param_regs = CURRENT_ABI.func_registers
-    return 'uint64_t ' + get_sub_name(sub_addr) + '(' + ', '.join([REG_VARS[x].datatype.value + ' ' + REG_VARS[x].name for x in param_regs]) + ', uint64_t RSP_args)'
+    sub_name = get_import_name(sub_addr)
+    sub_name = get_sub_name(sub_addr) if sub_name is None else sub_name
+    return 'uint64_t ' + sub_name + '(' + ', '.join([REG_VARS[x].datatype.value + ' ' + REG_VARS[x].name for x in param_regs]) + ', uint64_t RSP_args)'
 
 
 def decompile_function(program, sub_addr):

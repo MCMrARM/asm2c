@@ -1,5 +1,5 @@
 from consts import X86_TERMINATING_INSTRUCTIONS, X86_CONDITIONAL_INSTRUCTIONS, X86_JUMP_INSTRUCTIONS
-
+from ctx import is_known_sub
 
 MAX_BB_SIZE = 0x1000
 MAX_FN_SIZE = 0x10000
@@ -48,7 +48,7 @@ def find_bbs(md, fn_addr, code_dump, code_addr):
             continue
 
         for target in possible_jump_targets:
-            if target not in qs and abs(target - fn_addr) <= MAX_FN_SIZE and (target < max_end_addr or not check_prologue(target)):
+            if target not in qs and abs(target - fn_addr) <= MAX_FN_SIZE and (target < max_end_addr or not check_prologue(target)) and not is_known_sub(target):
                 q.append(target)
                 qs.add(target)
 

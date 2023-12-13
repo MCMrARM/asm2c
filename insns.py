@@ -3,7 +3,7 @@ from capstone.x86 import *
 from abi import CURRENT_ABI
 from cbuilder import *
 from consts import *
-from ctx import get_sub_name, get_data_name
+from ctx import get_sub_name, get_data_name, get_import_name
 from utils import REG_TO_PRIMARY_REG
 
 insn_handlers = {}
@@ -417,9 +417,14 @@ def call_handler(insn: 'Instruction'):
     regs = CURRENT_ABI.func_registers
     args = [REG_EXPR[reg] if REG_TO_PRIMARY_REG[reg] in insn.sub.used_regs else CVar('UNDEF', CDataType.U64) for reg in regs]
     args += [CAdd(REG_EXPR[X86_REG_RSP], CURRENT_ABI.shadow_stack_space_size) if X86_REG_RSP in insn.sub.used_regs else CVar('UNDEF', CDataType.U64)]
+    target = None
     if i.operands[0].type == X86_OP_IMM:
         target = CVar(get_sub_name(i.operands[0].imm), CDataType.FUNC)
-    else:
+    elif i.operands[0].type == X86_OP_MEM and i.operands[0].mem.base == X86_REG_RIP:
+        import_name = get_import_name(i.address + i.size + i.operands[0].mem.disp)
+        if import_name is not None:
+            target = CVar(import_name, CDataType.FUNC)
+    if target is None:
         target = CDeref(build_operand(insn, i.operands[0], True), CDataType.FUNC)
     return [
         CAssign(REG_VARS[X86_REG_RAX], CCall(target, args), CDataType.U64)
