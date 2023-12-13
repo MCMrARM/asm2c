@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #define INT3() abort()
 typedef uint64_t (afunc_t)(uint64_t RCX, uint64_t RDX, uint64_t R8, uint64_t R9, uint64_t RSP);
@@ -29,4 +31,8 @@ static inline void psrldq(reg128& to, unsigned int shift) {
     shift *= 8;
     to.low = (to.low >> shift) | (to.high << (64 - shift));
     to.high = (to.high >> shift);
+}
+static inline void UNIMPLEMENTED(const char* instr) {
+    printf("UNIMPLEMENTED: %s\n", instr);
+    abort();
 }
