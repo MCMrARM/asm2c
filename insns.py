@@ -496,9 +496,16 @@ def not_handler(insn: 'Instruction'):
 
 @insn_handler(X86_INS_NEG)
 def neg_handler(insn: 'Instruction'):
-    return [
-        CAssign(build_operand(insn, insn.i.operands[0], extend_to_64_bit=True), CNeg(cast_signed(build_operand(insn, insn.i.operands[0]))))
-    ]
+    expr = CNeg(cast_signed(build_operand(insn, insn.i.operands[0])))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    if (insn.set_flags & FLAG_CF) != 0:
+        zero = CImm(0, CDataType.S32)
+        ret.append(CAssign(VAR_CF, CNe(expr.left, zero)))
+    if (insn.set_flags & FLAG_OF) != 0:
+        raise Exception("NEG: OF is undefined")
+    ret.append(CAssign(build_operand(insn, insn.i.operands[0], extend_to_64_bit=True), expr_c))
+    return ret
 
 
 @insn_handler(X86_INS_SBB)

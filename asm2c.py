@@ -30,7 +30,7 @@ class Instruction:
         self.received_flags = 0
         self.reg_stack_off = None
 
-        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR, X86_INS_SBB):
+        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR, X86_INS_SBB, X86_INS_NEG):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF | FLAG_CF
         if i.id in (X86_INS_INC, X86_INS_DEC):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF
