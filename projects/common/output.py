@@ -11,7 +11,7 @@ def generate_output(program, ida_data):
     add_data_names({int(k, 16): v for k, v in ida_data['data_names'].items()})
     add_strings({int(k, 16): v for k, v in ida_data['strings'].items()})
 
-    print('#include <asm2c.h>')
+    print('#include "asm2c.h"')
     print('#include <array>')
     for addr, vt in ida_data['vtables'].items():
         print(f'extern std::array<afunc_t*, {len(vt)}> ' + get_data_name(int(addr, 16))[0] + ';')
