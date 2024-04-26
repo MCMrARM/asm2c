@@ -30,18 +30,22 @@ class Instruction:
         self.received_flags = 0
         self.reg_stack_off = None
 
-        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR):
+        if i.id in (X86_INS_SUB, X86_INS_ADD, X86_INS_CMP, X86_INS_XOR, X86_INS_OR, X86_INS_AND, X86_INS_TEST, X86_INS_SHL, X86_INS_SHR, X86_INS_SAR, X86_INS_SBB):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF | FLAG_CF
         if i.id in (X86_INS_INC, X86_INS_DEC):
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_ZF | FLAG_AF | FLAG_PF
         if i.id == X86_INS_BT:
             self.settable_flags = FLAG_OF | FLAG_SF | FLAG_AF | FLAG_PF | FLAG_CF
+        if i.id in (X86_INS_STC, X86_INS_CLC):
+            self.settable_flags = FLAG_CF
         if i.id in X86_JUMP_FLAGS:
             self.received_flags = X86_JUMP_FLAGS[i.id]
         if i.id in X86_CMOV_TO_JMP:
             self.received_flags = X86_JUMP_FLAGS[X86_CMOV_TO_JMP[i.id]]
         if i.id in X86_SET_TO_JMP:
             self.received_flags = X86_JUMP_FLAGS[X86_SET_TO_JMP[i.id]]
+        if i.id in (X86_INS_SBB, ):
+            self.received_flags = FLAG_CF
 
     def get_used_registers(self, ret: set[int]):
         for op in self.i.operands:

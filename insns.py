@@ -471,6 +471,22 @@ def bt_handler(insn: 'Instruction'):
     return ret
 
 
+@insn_handler(X86_INS_STC)
+def stc_handler(insn: 'Instruction'):
+    ret = []
+    if (insn.set_flags & FLAG_CF) != 0:
+        ret.append(CAssign(VAR_CF, CImm(True, CDataType.BOOL)))
+    return ret
+
+
+@insn_handler(X86_INS_CLC)
+def clc_handler(insn: 'Instruction'):
+    ret = []
+    if (insn.set_flags & FLAG_CF) != 0:
+        ret.append(CAssign(VAR_CF, CImm(False, CDataType.BOOL)))
+    return ret
+
+
 @insn_handler(X86_INS_NOT)
 def not_handler(insn: 'Instruction'):
     return [
@@ -483,3 +499,14 @@ def neg_handler(insn: 'Instruction'):
     return [
         CAssign(build_operand(insn, insn.i.operands[0], extend_to_64_bit=True), CNeg(cast_signed(build_operand(insn, insn.i.operands[0]))))
     ]
+
+
+@insn_handler(X86_INS_SBB)
+def sbb_handler(insn: 'Instruction'):
+    i = insn.i
+    expr = CSub(build_operand(insn, i.operands[0]), CAdd(build_operand(insn, i.operands[1]), CCast(VAR_CF, SIZE_TO_DATATYPE[i.operands[1].size], False)))
+    expr_c = cast_to(expr, expr.left.datatype)
+    ret = common_flags(insn, expr_c)
+    ret += handle_sub_flags(insn, expr.left, expr.right, expr_c)
+    ret.append(CAssign(build_operand(insn, i.operands[0], extend_to_64_bit=True), expr_c))
+    return ret
